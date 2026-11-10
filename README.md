@@ -16,7 +16,7 @@ environments/
     ├── providers.tf       # region and default tags
     ├── versions.tf
     ├── outputs.tf
-    └── ci.json            # region and role ARNs used by the workflows
+    └── ci.example.json    # rename to ci.json once filled: this activates the environment in CI
 .github/workflows/         # plan on pull requests, apply on main
 .terraform-version         # Terraform version used by the workflows
 ```
@@ -25,7 +25,9 @@ Each folder under `environments/` is an independent Terraform root with its own 
 
 ## Add an environment
 
-Do this once for each environment (`dev` is used below; `environments/dev/` holds placeholder values).
+Do this once for each environment (`dev` is used below).
+
+`environments/dev/` is an example with placeholder values. It is **inactive** until it contains a `ci.json`, so a fresh copy of this template runs no workflow against AWS.
 
 ### 1. Deploy the bootstrap stack
 
@@ -67,12 +69,14 @@ aws cloudformation describe-stacks --stack-name my-app-dev-terraform-bootstrap \
 ```
 
 - Copy `StateBucketName`, `StateKey` and `Region` into `backend.tf`.
-- Paste `CiJson` in `ci.json`.
+- Rename `ci.example.json` to `ci.json` and set `aws_region`, `plan_role_arn` and `apply_role_arn` from the outputs `Region`, `PlanRoleArn` and `ApplyRoleArn`.
 - Set the region, the tags and the module values in `providers.tf` and `main.tf`.
 
 ### 3. Create the GitHub Environment
 
 In **Settings > Environments**, create an Environment with the same name as the folder. Add required reviewers where you want a manual approval (typically `prod`), and limit deployments to the `main` branch.
+
+Do it **before** merging the `ci.json`: if the Environment does not exist, GitHub creates it on the first apply **without any protection**, and that apply runs without approval.
 
 ### 4. Check it locally
 
@@ -82,7 +86,7 @@ terraform init
 terraform plan
 ```
 
-Open a pull request: the workflows pick the new folder up automatically.
+Commit the folder with its `ci.json` and open a pull request: the workflows pick it up automatically.
 
 ## Workflows
 
