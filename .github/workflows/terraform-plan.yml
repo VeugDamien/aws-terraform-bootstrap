@@ -72,9 +72,6 @@ jobs:
           terraform_version: ${{ needs.detect.outputs.terraform-version }}
           terraform_wrapper: false
 
-      - name: Format
-        run: terraform fmt -check -recursive ../..
-
       - name: Init
         run: terraform init -input=false
 

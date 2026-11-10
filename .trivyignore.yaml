@@ -1,0 +1,11 @@
+# Accepted findings of trivy (security scan of the terraform-checks workflow).
+# Each entry is limited to the files it applies to and explains why.
+misconfigurations:
+  - id: AWS-0132
+    paths:
+      - "bootstrap/bootstrap.yaml"
+    statement: >-
+      The state bucket uses SSE-S3 on purpose: no KMS key to pay for and no KMS
+      permissions to manage. Access is restricted by IAM, TLS is enforced and
+      public access is blocked. Switch to SSE-KMS if your policy requires a
+      customer managed key.

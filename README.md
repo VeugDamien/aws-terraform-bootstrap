@@ -19,6 +19,8 @@ environments/
     └── ci.example.json    # rename to ci.json once filled: this activates the environment in CI
 .github/workflows/         # plan on pull requests, apply on main
 .terraform-version         # Terraform version used by the workflows
+.tflint.hcl                # tflint rules
+.trivyignore.yaml          # accepted security findings, with their reason
 ```
 
 Each folder under `environments/` is an independent Terraform root with its own state. You always know which environment you work on: `cd environments/prod`.
@@ -102,6 +104,7 @@ Keys and values are free, within AWS limits: keys up to 128 characters, values u
 
 | Workflow | Trigger | What it does |
 |----------|---------|--------------|
+| `terraform-checks` | Pull request and push to `main` | `terraform fmt`, `terraform validate`, tflint and a trivy security scan. No AWS access |
 | `terraform-plan` | Pull request to `main` | One plan per affected environment, all posted in a single PR comment |
 | `terraform-apply` | Push to `main`, or manual run | One apply per affected environment, each in its GitHub Environment (approval if configured) |
 
@@ -119,6 +122,29 @@ An environment is any folder under `environments/` that contains a `ci.json`. Fo
 Environments are applied in parallel, each waiting for its own approval. For a strict order (dev, then preprod, then prod), adapt `terraform-apply.yml` to your project.
 
 No secret and no repository variable is needed: the workflows read `ci.json` and get short-lived credentials through OIDC. Pull requests from forks never get credentials.
+
+## Checks
+
+`terraform-checks` runs on every pull request, including from forks, because it needs no AWS access:
+
+| Check | Tool | Fails on |
+|-------|------|----------|
+| Formatting | `terraform fmt -check -recursive` | any file not formatted |
+| Syntax and types | `terraform validate` in each `environments/*` and `modules/*` folder | any error |
+| Lint | tflint, with the Terraform and AWS rule sets (`.tflint.hcl`) | any issue |
+| Security | trivy, on the Terraform code and `bootstrap/bootstrap.yaml` | `HIGH` and `CRITICAL` findings |
+
+Run them locally before pushing:
+
+```bash
+terraform fmt -recursive
+tflint --init && tflint --recursive --config "$PWD/.tflint.hcl"
+trivy config --severity HIGH,CRITICAL --ignorefile .trivyignore.yaml .
+```
+
+To accept a security finding, add it to `.trivyignore.yaml` with its ID, the files it applies to and the reason. One finding is accepted out of the box: the state bucket uses SSE-S3 instead of a customer managed KMS key (see the file).
+
+To require the checks before merging, add `fmt and validate`, `tflint` and `trivy` as required status checks in the branch protection of `main`.
 
 ## Give the Apply role permissions
 
