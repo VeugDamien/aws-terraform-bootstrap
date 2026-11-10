@@ -13,7 +13,7 @@ Metadata:
       - Label: { default: Naming }
         Parameters: [Project, Environment]
       - Label: { default: GitHub }
-        Parameters: [GitHubOrganization, GitHubRepository]
+        Parameters: [GitHubOrganization, GitHubRepository, GitHubOwnerId, GitHubRepositoryId]
       - Label: { default: OIDC provider }
         Parameters: [CreateOidcProvider, ExistingOidcProviderArn]
       - Label: { default: Permissions }
@@ -46,6 +46,23 @@ Parameters:
     AllowedPattern: '^[A-Za-z0-9._-]{1,100}$'
     ConstraintDescription: A valid repository name. Wildcards are not allowed.
 
+  GitHubOwnerId:
+    Type: String
+    Default: ""
+    Description: >-
+      Numeric ID of the organization or user. Set it, with GitHubRepositoryId,
+      when the repository uses immutable OIDC subjects (repo:owner@id/repo@id:...).
+      Get both with: gh api repos/OWNER/REPO --jq '"\(.owner.id) \(.id)"'
+    AllowedPattern: '^([0-9]{1,20})?$'
+    ConstraintDescription: Empty, or a numeric ID.
+
+  GitHubRepositoryId:
+    Type: String
+    Default: ""
+    Description: Numeric ID of the repository. Set it together with GitHubOwnerId.
+    AllowedPattern: '^([0-9]{1,20})?$'
+    ConstraintDescription: Empty, or a numeric ID.
+
   CreateOidcProvider:
     Type: String
     Default: "true"
@@ -70,6 +87,16 @@ Parameters:
       the state until you add one.
 
 Rules:
+  RepositoryIdWithOwnerId:
+    RuleCondition: !Not [!Equals [!Ref GitHubOwnerId, ""]]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref GitHubRepositoryId, ""]]
+        AssertDescription: GitHubRepositoryId is required when GitHubOwnerId is set.
+  OwnerIdWithRepositoryId:
+    RuleCondition: !Not [!Equals [!Ref GitHubRepositoryId, ""]]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref GitHubOwnerId, ""]]
+        AssertDescription: GitHubOwnerId is required when GitHubRepositoryId is set.
   ExistingProviderArnRequired:
     RuleCondition: !Equals [!Ref CreateOidcProvider, "false"]
     Assertions:
@@ -78,6 +105,7 @@ Rules:
 
 Conditions:
   CreateProvider: !Equals [!Ref CreateOidcProvider, "true"]
+  UseImmutableSubject: !Not [!Equals [!Ref GitHubOwnerId, ""]]
   HasApplyPolicies: !Not [!Equals [!Join ["", !Ref ApplyPolicyArns], ""]]
 
 Resources:
@@ -161,7 +189,10 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubOrganization}/${GitHubRepository}:pull_request"
+                token.actions.githubusercontent.com:sub: !If
+                  - UseImmutableSubject
+                  - !Sub "repo:${GitHubOrganization}@${GitHubOwnerId}/${GitHubRepository}@${GitHubRepositoryId}:pull_request"
+                  - !Sub "repo:${GitHubOrganization}/${GitHubRepository}:pull_request"
       ManagedPolicyArns:
         - !Sub "arn:${AWS::Partition}:iam::aws:policy/ReadOnlyAccess"
       Policies:
@@ -199,7 +230,10 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubOrganization}/${GitHubRepository}:environment:${Environment}"
+                token.actions.githubusercontent.com:sub: !If
+                  - UseImmutableSubject
+                  - !Sub "repo:${GitHubOrganization}@${GitHubOwnerId}/${GitHubRepository}@${GitHubRepositoryId}:environment:${Environment}"
+                  - !Sub "repo:${GitHubOrganization}/${GitHubRepository}:environment:${Environment}"
       ManagedPolicyArns: !If [HasApplyPolicies, !Ref ApplyPolicyArns, !Ref AWS::NoValue]
       Policies:
         - PolicyName: terraform-state-readwrite

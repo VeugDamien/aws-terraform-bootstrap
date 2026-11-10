@@ -33,6 +33,18 @@ Do this once for each environment (`dev` is used below).
 
 ### 1. Deploy the bootstrap stack
 
+First check which OIDC subject format your repository uses:
+
+```bash
+gh api repos/my-org/my-repo/actions/oidc/customization/sub
+```
+
+If the answer contains `"use_immutable_subject": true` (the default for new repositories), GitHub sends subjects such as `repo:my-org@123/my-repo@456:pull_request`. Pass the numeric IDs to the stack:
+
+```bash
+gh api repos/my-org/my-repo --jq '"GitHubOwnerId=\(.owner.id) GitHubRepositoryId=\(.id)"'
+```
+
 In the AWS account of the environment, deploy `bootstrap/bootstrap.yaml` from the CloudFormation console or with:
 
 ```bash
@@ -43,10 +55,13 @@ aws cloudformation deploy \
   --parameter-overrides \
     Project=my-app Environment=dev \
     GitHubOrganization=my-org GitHubRepository=my-repo \
+    GitHubOwnerId=123 GitHubRepositoryId=456 \
   --tags my-company:project=my-app my-company:env=dev my-company:owner=team-a
 ```
 
-`Environment` must be the name of the folder. If the account already has a GitHub OIDC provider, add `CreateOidcProvider=false ExistingOidcProviderArn=<its ARN>`.
+- `Environment` must be the name of the folder.
+- Leave out `GitHubOwnerId` and `GitHubRepositoryId` if the repository uses the classic format (`repo:my-org/my-repo:...`).
+- If the account already has a GitHub OIDC provider, add `CreateOidcProvider=false ExistingOidcProviderArn=<its ARN>`. List them with `aws iam list-open-id-connect-providers`.
 
 The stack creates:
 
@@ -158,6 +173,8 @@ aws cloudformation deploy ... --parameter-overrides ... \
 Prefer your own least-privilege policy in production. The Plan role keeps `ReadOnlyAccess`, so it can plan any change without making it.
 
 ## Good to know
+
+- **`Not authorized to perform sts:AssumeRoleWithWebIdentity`**: the subject sent by GitHub does not match the role. The usual cause is the immutable subject format (see step 1). The exact subject is in CloudTrail, event `AssumeRoleWithWebIdentity`, field `userIdentity.userName`.
 
 - **Protect `main`**: require a pull request before merging, and the plan as a status check.
 - **One account per environment** is the recommended setup. Several environments in one account also work: deploy the first stack with the OIDC provider, the next ones with `CreateOidcProvider=false`.

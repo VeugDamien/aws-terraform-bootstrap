@@ -119,7 +119,7 @@ jobs:
             for (const f of files) {
               let plan = fs.readFileSync(`plans/${f}`, 'utf8');
               if (plan.length > budget) plan = plan.slice(0, budget) + '\n... (truncated, see the artifacts)';
-              const summary = (plan.match(/^Plan: .*$|^No changes\..*$/m) || ['see details'])[0];
+              const summary = (plan.match(/^Plan: .*$|^No changes\..*$/m) || [/^Changes to Outputs:/m.test(plan) ? 'output changes only' : 'see details'])[0];
               body += `\n<details><summary><b>${f.replace('.txt', '')}</b>: ${summary}</summary>\n\n\`\`\`\n${plan}\n\`\`\`\n\n</details>\n`;
             }
             const { owner, repo } = context.repo;
