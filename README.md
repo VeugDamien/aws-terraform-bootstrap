@@ -69,7 +69,7 @@ aws cloudformation describe-stacks --stack-name my-app-dev-terraform-bootstrap \
 ```
 
 - Copy `StateBucketName`, `StateKey` and `Region` into `backend.tf`.
-- Rename `ci.example.json` to `ci.json` and set `aws_region`, `plan_role_arn` and `apply_role_arn` from the outputs `Region`, `PlanRoleArn` and `ApplyRoleArn`.
+- Rename `ci.example.json` to `ci.json` and replace its content with the output `CiJson`.
 - Set the region, the tags and the module values in `providers.tf` and `main.tf`.
 
 ### 3. Create the GitHub Environment
