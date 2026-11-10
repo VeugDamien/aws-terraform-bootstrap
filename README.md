@@ -40,7 +40,8 @@ aws cloudformation deploy \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameter-overrides \
     Project=my-app Environment=dev \
-    GitHubOrganization=my-org GitHubRepository=my-repo
+    GitHubOrganization=my-org GitHubRepository=my-repo \
+  --tags my-company:project=my-app my-company:env=dev my-company:owner=team-a
 ```
 
 `Environment` must be the name of the folder. If the account already has a GitHub OIDC provider, add `CreateOidcProvider=false ExistingOidcProviderArn=<its ARN>`.
@@ -87,6 +88,15 @@ terraform plan
 ```
 
 Commit the folder with its `ci.json` and open a pull request: the workflows pick it up automatically.
+
+## Tags
+
+The bootstrap stack sets no tag of its own: use your company convention.
+
+- **Bootstrap resources**: pass stack tags with `--tags Key=Value ...` (or in the console, step "Configure stack options"). CloudFormation applies them to every resource of the stack. Changing them later only needs a redeploy with the new tags.
+- **Resources created by Terraform**: set `default_tags` in `environments/<env>/providers.tf`. They are applied to every taggable resource of the AWS provider.
+
+Keys and values are free, within AWS limits: keys up to 128 characters, values up to 256, and no `aws:` prefix.
 
 ## Workflows
 

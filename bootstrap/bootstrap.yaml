@@ -3,6 +3,10 @@ Description: >-
   Terraform bootstrap for GitHub Actions: S3 state bucket, optional GitHub OIDC
   provider, and Plan / Apply IAM roles assumed without static credentials.
 
+# Tags: none are set here on purpose. Pass your own as stack tags
+# (aws cloudformation deploy --tags Key=Value ...): CloudFormation applies them
+# to every resource of the stack.
+
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
@@ -108,10 +112,6 @@ Resources:
               NoncurrentDays: 90
             AbortIncompleteMultipartUpload:
               DaysAfterInitiation: 7
-      Tags:
-        - { Key: Project, Value: !Ref Project }
-        - { Key: Environment, Value: !Ref Environment }
-        - { Key: ManagedBy, Value: cloudformation }
 
   StateBucketPolicy:
     Type: AWS::S3::BucketPolicy
@@ -140,8 +140,6 @@ Resources:
     Properties:
       Url: https://token.actions.githubusercontent.com
       ClientIdList: [sts.amazonaws.com]
-      Tags:
-        - { Key: ManagedBy, Value: cloudformation }
 
   # ---------------------------------------------------------------------------
   # Plan role: pull requests of the repository only. Read-only on AWS, read on
@@ -180,10 +178,6 @@ Resources:
               - Effect: Allow
                 Action: [s3:PutObject, s3:DeleteObject]
                 Resource: !Sub "${StateBucket.Arn}/${Project}/*.tflock"
-      Tags:
-        - { Key: Project, Value: !Ref Project }
-        - { Key: Environment, Value: !Ref Environment }
-        - { Key: ManagedBy, Value: cloudformation }
 
   # ---------------------------------------------------------------------------
   # Apply role: jobs running in the GitHub Environment named like Environment.
@@ -218,10 +212,6 @@ Resources:
               - Effect: Allow
                 Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
                 Resource: !Sub "${StateBucket.Arn}/${Project}/*"
-      Tags:
-        - { Key: Project, Value: !Ref Project }
-        - { Key: Environment, Value: !Ref Environment }
-        - { Key: ManagedBy, Value: cloudformation }
 
 Outputs:
   StateBucketName:
