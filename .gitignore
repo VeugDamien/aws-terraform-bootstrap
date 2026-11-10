@@ -1,0 +1,14 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+
+# Local overrides and secrets
+*.auto.tfvars
+override.tf
+override.tf.json
+*_override.tf
+.env*

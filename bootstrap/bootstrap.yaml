@@ -1,0 +1,247 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Terraform bootstrap for GitHub Actions: S3 state bucket, optional GitHub OIDC
+  provider, and Plan / Apply IAM roles assumed without static credentials.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: { default: Naming }
+        Parameters: [Project, Environment]
+      - Label: { default: GitHub }
+        Parameters: [GitHubOrganization, GitHubRepository]
+      - Label: { default: OIDC provider }
+        Parameters: [CreateOidcProvider, ExistingOidcProviderArn]
+      - Label: { default: Permissions }
+        Parameters: [ApplyPolicyArns]
+
+Parameters:
+  Project:
+    Type: String
+    Description: Project name, used in resource names, tags and as the state key prefix.
+    AllowedPattern: '^[a-z0-9]([a-z0-9-]{0,18}[a-z0-9])?$'
+    ConstraintDescription: 1 to 20 lowercase letters, digits or hyphens, no leading or trailing hyphen.
+
+  Environment:
+    Type: String
+    Description: >-
+      Environment name. Must match the folder environments/<name> and the GitHub
+      Environment trusted by the Apply role (for example dev or prod).
+    AllowedPattern: '^[a-z0-9]{2,10}$'
+    ConstraintDescription: 2 to 10 lowercase letters or digits.
+
+  GitHubOrganization:
+    Type: String
+    Description: GitHub organization or user that owns the repository (case-sensitive).
+    AllowedPattern: '^[A-Za-z0-9][A-Za-z0-9-]{0,38}$'
+    ConstraintDescription: A valid GitHub organization or user name.
+
+  GitHubRepository:
+    Type: String
+    Description: Repository name, without the organization (case-sensitive).
+    AllowedPattern: '^[A-Za-z0-9._-]{1,100}$'
+    ConstraintDescription: A valid repository name. Wildcards are not allowed.
+
+  CreateOidcProvider:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Create the GitHub OIDC provider. Use false when the account already has one
+      (only one is allowed per account) and set ExistingOidcProviderArn.
+
+  ExistingOidcProviderArn:
+    Type: String
+    Default: ""
+    Description: ARN of the existing GitHub OIDC provider. Required when CreateOidcProvider is false.
+    AllowedPattern: '^(arn:aws[a-z-]*:iam::[0-9]{12}:oidc-provider/token\.actions\.githubusercontent\.com)?$'
+    ConstraintDescription: Empty, or the ARN of the token.actions.githubusercontent.com OIDC provider.
+
+  ApplyPolicyArns:
+    Type: CommaDelimitedList
+    Default: ""
+    Description: >-
+      Managed policy ARNs granting the Apply role the permissions your Terraform code
+      needs (for example a custom policy). Empty by default: the role can only manage
+      the state until you add one.
+
+Rules:
+  ExistingProviderArnRequired:
+    RuleCondition: !Equals [!Ref CreateOidcProvider, "false"]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref ExistingOidcProviderArn, ""]]
+        AssertDescription: ExistingOidcProviderArn is required when CreateOidcProvider is false.
+
+Conditions:
+  CreateProvider: !Equals [!Ref CreateOidcProvider, "true"]
+  HasApplyPolicies: !Not [!Equals [!Join ["", !Ref ApplyPolicyArns], ""]]
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # State bucket: versioned, encrypted, private, TLS only. Kept on stack deletion.
+  # ---------------------------------------------------------------------------
+  StateBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${Project}-${Environment}-tfstate-${AWS::AccountId}"
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireOldStateVersions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 90
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      Tags:
+        - { Key: Project, Value: !Ref Project }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: ManagedBy, Value: cloudformation }
+
+  StateBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref StateBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt StateBucket.Arn
+              - !Sub "${StateBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  # ---------------------------------------------------------------------------
+  # GitHub OIDC provider (one per account).
+  # ---------------------------------------------------------------------------
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+      Tags:
+        - { Key: ManagedBy, Value: cloudformation }
+
+  # ---------------------------------------------------------------------------
+  # Plan role: pull requests of the repository only. Read-only on AWS, read on
+  # the state, and write on the lock file (.tflock) so plan can take the lock.
+  # ---------------------------------------------------------------------------
+  PlanRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Project}-${Environment}-github-plan"
+      Description: Assumed by GitHub Actions pull requests to run terraform plan.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If [CreateProvider, !Ref GitHubOidcProvider, !Ref ExistingOidcProviderArn]
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubOrganization}/${GitHubRepository}:pull_request"
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/ReadOnlyAccess"
+      Policies:
+        - PolicyName: terraform-state-read
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt StateBucket.Arn
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub "${StateBucket.Arn}/${Project}/*"
+              - Effect: Allow
+                Action: [s3:PutObject, s3:DeleteObject]
+                Resource: !Sub "${StateBucket.Arn}/${Project}/*.tflock"
+      Tags:
+        - { Key: Project, Value: !Ref Project }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: ManagedBy, Value: cloudformation }
+
+  # ---------------------------------------------------------------------------
+  # Apply role: jobs running in the GitHub Environment named like Environment.
+  # Full access to the state, plus the policies given in ApplyPolicyArns.
+  # ---------------------------------------------------------------------------
+  ApplyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Project}-${Environment}-github-apply"
+      Description: Assumed by GitHub Actions to run terraform apply.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If [CreateProvider, !Ref GitHubOidcProvider, !Ref ExistingOidcProviderArn]
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubOrganization}/${GitHubRepository}:environment:${Environment}"
+      ManagedPolicyArns: !If [HasApplyPolicies, !Ref ApplyPolicyArns, !Ref AWS::NoValue]
+      Policies:
+        - PolicyName: terraform-state-readwrite
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt StateBucket.Arn
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+                Resource: !Sub "${StateBucket.Arn}/${Project}/*"
+      Tags:
+        - { Key: Project, Value: !Ref Project }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: ManagedBy, Value: cloudformation }
+
+Outputs:
+  StateBucketName:
+    Description: Name of the Terraform state bucket.
+    Value: !Ref StateBucket
+  PlanRoleArn:
+    Description: Role assumed by the plan workflow.
+    Value: !GetAtt PlanRole.Arn
+  ApplyRoleArn:
+    Description: Role assumed by the apply workflow.
+    Value: !GetAtt ApplyRole.Arn
+  OidcProviderArn:
+    Description: GitHub OIDC provider used by the roles.
+    Value: !If [CreateProvider, !Ref GitHubOidcProvider, !Ref ExistingOidcProviderArn]
+  StateKey:
+    Description: State key to use in environments/<env>/backend.tf.
+    Value: !Sub "${Project}/${Environment}/terraform.tfstate"
+  Region:
+    Description: Region of the state bucket and the roles.
+    Value: !Ref AWS::Region
+  CiJson:
+    Description: Content of environments/<env>/ci.json.
+    Value: !Sub '{"aws_region": "${AWS::Region}", "plan_role_arn": "${PlanRole.Arn}", "apply_role_arn": "${ApplyRole.Arn}"}'

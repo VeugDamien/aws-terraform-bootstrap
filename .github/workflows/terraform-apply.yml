@@ -1,0 +1,95 @@
+# Terraform apply on main, one job per affected environment.
+# Each job runs in the GitHub Environment named like the folder: configure
+# reviewers there (for example on prod) to require an approval before apply.
+# Run it by hand (Actions > terraform-apply > Run workflow) to apply every environment.
+name: terraform-apply
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    name: Detect environments
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      environments: ${{ steps.detect.outputs.environments }}
+      terraform-version: ${{ steps.detect.outputs.terraform-version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: detect
+        env:
+          # Empty for a manual run: every environment is applied.
+          BASE: ${{ github.event_name == 'push' && github.event.before || '' }}
+        run: |
+          echo "environments=$(.github/scripts/environments.sh "${BASE}" HEAD)" >> "${GITHUB_OUTPUT}"
+          echo "terraform-version=$(tr -d '[:space:]' < .terraform-version)" >> "${GITHUB_OUTPUT}"
+
+  apply:
+    name: Apply ${{ matrix.environment }}
+    needs: detect
+    if: needs.detect.outputs.environments != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: ${{ fromJSON(needs.detect.outputs.environments) }}
+    # The Apply role only trusts jobs running in this GitHub Environment.
+    environment: ${{ matrix.environment }}
+    # Never cancel a running apply: it can leave the state locked.
+    concurrency:
+      group: terraform-apply-${{ matrix.environment }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: environments/${{ matrix.environment }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read ci.json
+        id: ci
+        run: |
+          echo "region=$(jq -er .aws_region ci.json)" >> "${GITHUB_OUTPUT}"
+          echo "role=$(jq -er .apply_role_arn ci.json)" >> "${GITHUB_OUTPUT}"
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ steps.ci.outputs.role }}
+          aws-region: ${{ steps.ci.outputs.region }}
+          role-session-name: terraform-apply
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ needs.detect.outputs.terraform-version }}
+          terraform_wrapper: false
+
+      - name: Init
+        run: terraform init -input=false
+
+      # A fresh plan: the pull request plan is stale after the merge.
+      - name: Plan
+        run: |
+          terraform plan -input=false -no-color -lock-timeout=5m -out=tfplan
+          {
+            echo '### Terraform plan'
+            echo '```'
+            terraform show -no-color tfplan | head -c 60000
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Apply
+        run: terraform apply -input=false -no-color -lock-timeout=5m tfplan
