@@ -21,9 +21,24 @@ environments/
 .terraform-version         # Terraform version used by the workflows
 .tflint.hcl                # tflint rules
 .trivyignore.yaml          # accepted security findings, with their reason
+.github/rulesets/          # optional protection of main, to import (see below)
 ```
 
 Each folder under `environments/` is an independent Terraform root with its own state. You always know which environment you work on: `cd environments/prod`.
+
+## After creating your repository
+
+"Use this template" copies the files only, not the repository settings. Do this once in your new repository:
+
+- [ ] **Protect `main`** with the provided ruleset (optional, but recommended). It requires a pull request and the `fmt and validate`, `tflint` and `trivy` checks, and blocks force pushes and deletion:
+
+  ```bash
+  gh api -X POST repos/my-org/my-repo/rulesets --input .github/rulesets/protect-main.json
+  ```
+
+  Or in **Settings > Rules > Rulesets > New ruleset > Import a ruleset**. Edit the file first to adapt it: for a team, set `required_approving_review_count` to `1`. Rulesets on private repositories of a personal account need GitHub Pro.
+- [ ] **Enable security features** in **Settings > Advanced Security**: Dependabot alerts, secret scanning and push protection.
+- [ ] **Create the GitHub Environments** and set up each environment (next section).
 
 ## Add an environment
 
@@ -159,7 +174,7 @@ trivy config --severity HIGH,CRITICAL --ignorefile .trivyignore.yaml .
 
 To accept a security finding, add it to `.trivyignore.yaml` with its ID, the files it applies to and the reason. One finding is accepted out of the box: the state bucket uses SSE-S3 instead of a customer managed KMS key (see the file).
 
-To require the checks before merging, add `fmt and validate`, `tflint` and `trivy` as required status checks in the branch protection of `main`.
+To require the checks before merging, import the ruleset (see [After creating your repository](#after-creating-your-repository)).
 
 ## Give the Apply role permissions
 
@@ -176,7 +191,6 @@ Prefer your own least-privilege policy in production. The Plan role keeps `ReadO
 
 - **`Not authorized to perform sts:AssumeRoleWithWebIdentity`**: the subject sent by GitHub does not match the role. The usual cause is the immutable subject format (see step 1). The exact subject is in CloudTrail, event `AssumeRoleWithWebIdentity`, field `userIdentity.userName`.
 
-- **Protect `main`**: require a pull request before merging, and the plan as a status check.
 - **One account per environment** is the recommended setup. Several environments in one account also work: deploy the first stack with the OIDC provider, the next ones with `CreateOidcProvider=false`.
 - **Required reviewers** on a private repository need a paid GitHub plan.
 - **Removing an environment**: delete its folder, then its stack. The state bucket is kept on purpose. Empty and delete it by hand if you really want it gone.
